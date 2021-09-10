@@ -3,6 +3,7 @@ package task
 import (
 	"context"
 	"encoding/json"
+	"github.com/cloudreve/Cloudreve/v3/pkg/conf"
 	"path"
 
 	model "github.com/cloudreve/Cloudreve/v3/models"
@@ -132,6 +133,10 @@ func (job *ImportTask) Do() {
 	// 插入文件记录到用户文件系统
 	for _, object := range objects {
 		if !object.IsDir {
+			// 忽略缩略图
+			if filesystem.IsInExtensionList([]string{conf.ThumbConfig.FileSuffix[1:]},object.Name){
+				continue
+			}
 			// 创建文件信息
 			virtualPath := path.Dir(path.Join(job.TaskProps.Dst, object.RelativePath))
 			fileHeader := local.FileStream{
@@ -162,7 +167,7 @@ func (job *ImportTask) Do() {
 			}
 
 			// 插入文件记录
-			_, err := fs.AddFile(addFileCtx, parentFolder)
+			file, err := fs.AddFile(addFileCtx, parentFolder)
 			if err != nil {
 				util.Log().Warning("导入任务无法创插入文件[%s], %s",
 					object.RelativePath, err)
@@ -171,7 +176,10 @@ func (job *ImportTask) Do() {
 					return
 				}
 			}
-
+			// 异步添加缩略图,mov转换为mp4等操作
+			if file != nil{
+				fs.AfterImport(addFileCtx, file)
+			}
 		}
 	}
 }

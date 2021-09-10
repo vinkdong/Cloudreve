@@ -2,7 +2,10 @@ package filesystem
 
 import (
 	"context"
+	"fmt"
 	"io"
+	"os"
+	"os/exec"
 
 	model "github.com/cloudreve/Cloudreve/v3/models"
 	"github.com/cloudreve/Cloudreve/v3/pkg/conf"
@@ -68,6 +71,12 @@ func (fs *FileSystem) AddFile(ctx context.Context, parent *model.Folder) (*model
 	if fs.User.Policy.IsThumbExist(file.GetFileName()) {
 		newFile.PicInfo = "1,1"
 	}
+
+	/*
+		todo: 此处创建导入缩略图
+		位置: /cloudreve/thrum/{userid}/{file_id}-{file_name}.thumb
+
+	*/
 
 	_, err = newFile.Create()
 
@@ -355,4 +364,41 @@ func (fs *FileSystem) Search(ctx context.Context, keywords ...interface{}) ([]Ob
 	fs.SetTargetFile(&files)
 
 	return fs.listObjects(ctx, "/", files, nil, nil), nil
+}
+
+// 自定义上传操作
+func (fs *FileSystem) AfterImport(ctx context.Context, file *model.File) {
+	var err error
+	// 生成图片缩略图
+	if IsInExtensionList(HandledExtension, file.Name) {
+		if fs.User.Policy.IsThumbGenerateNeeded() {
+			fs.recycleLock.Lock()
+			go func() {
+				defer fs.recycleLock.Unlock()
+				fs.GenerateThumbnail(ctx, file)
+			}()
+		}
+	}
+	// 生成视频缩略图
+	if IsInExtensionList([]string{"mov", "mp4", "wma", "avi"}, file.Name) {
+		//ffmpeg -i VID_20200808_141450.mp4 -r 1  -t 00:00:01 -f image2 VID_20200808_141450.mp4._thumb
+		cmd := exec.Command("ffmpeg", "-i", file.SourceName, "-r", "1", "-t", "00:00:01", file.SourceName+".jpg")
+		cmd.Stdout = os.Stdout
+		cmd.Stderr = os.Stderr
+		if err := cmd.Run(); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			return
+		}
+		if err := os.Rename(file.SourceName+".jpg", file.SourceName+conf.ThumbConfig.FileSuffix); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			return
+		}
+		fs.recycleLock.Lock()
+		go func() {
+			defer fs.recycleLock.Unlock()
+			if file.Model.ID > 0 {
+				err = file.UpdatePicInfo(fmt.Sprintf("%d,%d", 1920, 1080))
+			}
+		}()
+	}
 }
